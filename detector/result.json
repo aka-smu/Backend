@@ -1,0 +1,36 @@
+{
+    "meta": {
+        "topic": "TOPIC",
+        "entry_url": "https://example.com",
+        "started_at": "2026-10-12T21:45:14.679621+09:00",
+        "finished_at": "2026-10-12T21:45:14.680218+09:00",
+        "elapsed_sec": 0.001,
+        "tool_version": "1.0.0"
+    },
+    "findings": [
+        {
+            "id": "f_001",
+            "url": "https://example.com/post/1",
+            "is_violation": true,
+            "location": "div.jamo-ad",
+            "evidence_text": "ㅋㅏㅈㅣㄴㅗ 첫충 가입머니",
+            "technique": "JAMO"
+        },
+        {
+            "id": "f_002",
+            "url": "https://example.com/post/2",
+            "is_violation": true,
+            "location": "div.transparent-ad",
+            "evidence_text": "카지노 첫충 가입머니",
+            "technique": "KEYWORD"
+        },
+        {
+            "id": "f_003",
+            "url": "https://example.com/post/3",
+            "is_violation": true,
+            "location": "div.offscreen-ad",
+            "evidence_text": "무직자 즉시 승인 당일 대출",
+            "technique": "KEYWORD"
+        }
+    ]
+}
