@@ -1,0 +1,1 @@
+from database.repository import save_scan_result
