@@ -1,219 +1,46 @@
-import re
-import unicodedata
+"""반복적으로 게시되는 유사 광고 댓글을 탐지한다."""
+
+from collections import defaultdict
 from difflib import SequenceMatcher
 
+from .config import (
+    SIMILARITY_THRESHOLD,
+    MIN_SIMILAR_COMMENTS,
+    MAX_COMMENT_LENGTH,
+    SPAM_BASE_SCORE,
+)
 
-# --------------------------------------------------
-# 반복 스팸 판단 기준
-# 실제 데이터 튜닝 시 이 값만 조정 가능
-# --------------------------------------------------
+from .keywords import (
+    SEARCH_INDUCEMENT_KEYWORDS,
+    BAIT_KEYWORDS,
+)
 
-SIMILARITY_THRESHOLD = 0.75
-MIN_SIMILAR_COMMENTS = 5
-
-
-# --------------------------------------------------
-# 우회 문자 정규화
-# --------------------------------------------------
-
-HOMOGLYPH_MAP = {
-    "ι": "i",
-    "Ι": "i",
-    "ｉ": "i",
-    "ⓘ": "i",
-
-    "０": "0",
-    "１": "1",
-    "２": "2",
-    "３": "3",
-    "４": "4",
-    "５": "5",
-    "６": "6",
-    "７": "7",
-    "８": "8",
-    "９": "9",
-}
+from .normalizer import normalize_text
 
 
-def normalize_homoglyph(text):
-    """
-    전각 문자 등 Unicode 우회 문자를
-    일반 문자 형태로 정규화
-    """
+def is_comment(content):
+    """댓글 영역에서 수집한 콘텐츠인지 확인한다."""
 
-    text = unicodedata.normalize(
-        "NFKC",
-        text
-    )
+    source_type = str(
+        content.get("source_type", "")
+    ).lower()
 
-    for fake, normal in HOMOGLYPH_MAP.items():
-        text = text.replace(
-            fake,
-            normal
-        )
+    location = str(
+        content.get("location", "")
+    ).lower()
 
-    return text
-
-
-# --------------------------------------------------
-# 댓글 비교용 정규화
-# --------------------------------------------------
-
-def normalize_comment(text):
-
-    if not text:
-        return ""
-
-    text = text.lower()
-
-    # Unicode 정규화
-    text = normalize_homoglyph(text)
-
-    # Instagram UI 문자열 제거
-    text = re.sub(
-        r"like|reply",
-        "",
-        text,
-        flags=re.IGNORECASE
-    )
-
-    # 시간 표시 제거
-    # 5w / 2d / 3h 등
-    text = re.sub(
-        r"\b\d+\s*[wdhms]\b",
-        "",
-        text,
-        flags=re.IGNORECASE
-    )
-
-    # 특수문자 / 공백 제거
-    # 광고 문구 사이에 ., ˙, 。 등을
-    # 삽입하는 우회 대응
-    text = re.sub(
-        r"[^가-힣ㄱ-ㅎㅏ-ㅣa-z0-9]",
-        "",
-        text
-    )
-
-    return text
-
-
-# --------------------------------------------------
-# URL 존재 여부
-# --------------------------------------------------
-
-def contains_url(text):
-
-    if not text:
-        return False
-
-    pattern = r"https?://[^\s]+"
-
-    return bool(
-        re.search(
-            pattern,
-            text,
-            re.IGNORECASE
-        )
+    return (
+        source_type == "comment"
+        or "comment" in location
+        or "댓글" in location
     )
 
 
-# --------------------------------------------------
-# 검색 유도 표현 탐지
-# --------------------------------------------------
+def similarity(text1, text2):
+    """두 문장의 유사도를 0~1 사이 값으로 계산한다."""
 
-def contains_search_inducement(text):
-
-    if not text:
-        return False
-
-    normalized = normalize_comment(text)
-
-    keywords = [
-        "검색",
-        "검색하면",
-        "검색해봐",
-        "검색해보면",
-        "찾아봐",
-        "찾아보면",
-        "네이버",
-
-        # 실제 스팸에서 확인된 변형
-        "구글",
-        "꾸글",
-        "google",
-    ]
-
-    for keyword in keywords:
-
-        normalized_keyword = normalize_comment(
-            keyword
-        )
-
-        if normalized_keyword in normalized:
-            return True
-
-    # '검 ... 색'처럼 글자를 분리한 경우
-    if "검" in normalized and "색" in normalized:
-        return True
-
-    return False
-
-
-# --------------------------------------------------
-# 낚시성 표현 탐지
-# --------------------------------------------------
-
-def contains_bait(text):
-
-    if not text:
-        return False
-
-    normalized = normalize_comment(text)
-
-    keywords = [
-        "유출",
-        "유츨",
-        "영상",
-        "사진",
-        "실화",
-        "진짜였어",
-        "삭제되기전에",
-        "믿기힘들",
-        "충격",
-        "이중생활",
-        "어린애들은",
-        "남자만",
-    ]
-
-    for keyword in keywords:
-
-        normalized_keyword = normalize_comment(
-            keyword
-        )
-
-        if normalized_keyword in normalized:
-            return True
-
-    return False
-
-
-# --------------------------------------------------
-# 두 댓글의 유사도
-# --------------------------------------------------
-
-def calculate_similarity(
-    text1,
-    text2
-):
-
-    normalized1 = normalize_comment(
-        text1
-    )
-
-    normalized2 = normalize_comment(
-        text2
-    )
+    normalized1 = normalize_text(text1)
+    normalized2 = normalize_text(text2)
 
     if not normalized1 or not normalized2:
         return 0.0
@@ -221,217 +48,116 @@ def calculate_similarity(
     return SequenceMatcher(
         None,
         normalized1,
-        normalized2
+        normalized2,
     ).ratio()
 
 
-# --------------------------------------------------
-# 완전히 같은 댓글 제거
-# --------------------------------------------------
+def has_ad_signal(text):
+    """검색 유도 또는 광고성 표현이 있는지 확인한다."""
 
-def remove_duplicate_comments(comments):
+    normalized = normalize_text(text)
 
-    unique = []
-    seen = set()
+    keywords = (
+        SEARCH_INDUCEMENT_KEYWORDS
+        | BAIT_KEYWORDS
+    )
 
-    for comment in comments:
+    return any(
+        normalize_text(keyword) in normalized
+        for keyword in keywords
+    )
 
-        text = comment.get(
-            "text",
-            ""
-        ).strip()
+
+def get_comment_scope(content):
+    """같은 페이지와 댓글 영역에 속하는지 구분한다."""
+
+    return (
+        content.get("url", ""),
+        content.get("frame_id") or "",
+        content.get("frame_url") or "",
+        content.get("frame_path") or "",
+        content.get("comment_scope") or "",
+    )
+
+
+def detect_repeated_spam(contents):
+    """같은 영역에 반복 게시된 유사 광고 댓글을 탐지한다."""
+
+    groups = defaultdict(list)
+
+    for content in contents:
+        if not is_comment(content):
+            continue
+
+        text = str(content.get("text", "")).strip()
 
         if not text:
             continue
 
-        # 같은 URL + 같은 위치 + 같은 텍스트는
-        # 동일한 DOM 데이터로 판단
-        key = (
-            comment.get("url", ""),
-            comment.get("location", ""),
-            text
-        )
-
-        if key in seen:
+        if len(text) > MAX_COMMENT_LENGTH:
             continue
 
-        seen.add(key)
-        unique.append(comment)
+        scope = get_comment_scope(content)
+        groups[scope].append(content)
 
-    return unique
+    findings = []
 
+    for scope, comments in groups.items():
+        visited = set()
 
-# --------------------------------------------------
-# 유사 댓글 그룹 생성
-# --------------------------------------------------
-
-def find_similar_comment_groups(
-    comments
-):
-
-    groups = []
-
-    used = set()
-
-    for i in range(len(comments)):
-
-        if i in used:
-            continue
-
-        base = comments[i]
-
-        group = [base]
-        group_indexes = [i]
-
-        for j in range(
-            i + 1,
-            len(comments)
-        ):
-
-            if j in used:
+        for i, base in enumerate(comments):
+            if i in visited:
                 continue
 
-            similarity = calculate_similarity(
-                base["text"],
-                comments[j]["text"]
-            )
+            similar_indices = [i]
 
-            if similarity >= SIMILARITY_THRESHOLD:
+            for j in range(i + 1, len(comments)):
+                if j in visited:
+                    continue
 
-                group.append(
-                    comments[j]
+                score = similarity(
+                    base.get("text", ""),
+                    comments[j].get("text", ""),
                 )
 
-                group_indexes.append(j)
+                if score >= SIMILARITY_THRESHOLD:
+                    similar_indices.append(j)
 
-        if len(group) >= MIN_SIMILAR_COMMENTS:
+            if len(similar_indices) < MIN_SIMILAR_COMMENTS:
+                continue
 
-            groups.append(group)
+            matching_comments = [
+                comments[index]
+                for index in similar_indices
+            ]
 
-            for index in group_indexes:
-                used.add(index)
+            if not any(
+                has_ad_signal(item.get("text", ""))
+                for item in matching_comments
+            ):
+                continue
 
-    return groups
+            visited.update(similar_indices)
 
+            for item in matching_comments:
+                findings.append({
+                    "url": item.get("url", ""),
+                    "location": item.get("location", ""),
+                    "text": item.get("text", ""),
+                    "category": "spam",
+                    "score": SPAM_BASE_SCORE,
+                    "raw_score": SPAM_BASE_SCORE,
+                    "matched_keywords": [],
+                    "evidence": {},
+                    "techniques": ["REPEATED_SPAM"],
+                    "source_type": "comment",
+                    "frame_id": item.get("frame_id"),
+                    "frame_url": item.get("frame_url"),
+                    "frame_path": item.get("frame_path"),
+                    "details": {
+                        "similar_count": len(similar_indices),
+                        "similarity_threshold": SIMILARITY_THRESHOLD,
+                    },
+                })
 
-# --------------------------------------------------
-# 반복 스팸 최종 탐지
-# --------------------------------------------------
-
-def detect_repeated_spam(
-    crawl_results
-):
-
-    # ----------------------------------------------
-    # 댓글로 분류된 데이터만 사용
-    # ----------------------------------------------
-
-    comments = []
-
-    for item in crawl_results:
-
-        if item.get(
-            "element_type"
-        ) != "comment":
-            continue
-
-        text = item.get(
-            "text",
-            ""
-        )
-
-        if not text:
-            continue
-
-        # 지나치게 긴 부모 DOM 제외
-        if len(text) > 500:
-            continue
-
-        comments.append(item)
-
-    # DOM 중복 제거
-    comments = remove_duplicate_comments(
-        comments
-    )
-
-    # 유사 댓글 그룹 생성
-    groups = find_similar_comment_groups(
-        comments
-    )
-
-    spam_results = []
-
-    for group in groups:
-
-        texts = [
-            item["text"]
-            for item in group
-        ]
-
-        has_url = any(
-            contains_url(text)
-            for text in texts
-        )
-
-        has_search = any(
-            contains_search_inducement(text)
-            for text in texts
-        )
-
-        has_bait = any(
-            contains_bait(text)
-            for text in texts
-        )
-
-        # 단순히 비슷하기만 한 댓글은
-        # 스팸으로 처리하지 않음
-        if not (
-            has_url
-            or has_search
-            or has_bait
-        ):
-            continue
-
-        evidence = []
-
-        for item in group:
-
-            evidence.append({
-                "url": item.get(
-                    "url",
-                    ""
-                ),
-
-                "location": item.get(
-                    "location",
-                    ""
-                ),
-
-                "text": item.get(
-                    "text",
-                    ""
-                )
-            })
-
-        spam_results.append({
-
-            "type":
-                "REPEATED_SPAM",
-
-            "count":
-                len(group),
-
-            "has_url":
-                has_url,
-
-            "has_search_inducement":
-                has_search,
-
-            "has_bait":
-                has_bait,
-
-            "evidence":
-                evidence
-        })
-
-    return spam_results
+    return findings
