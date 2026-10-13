@@ -1,0 +1,22 @@
+
+{
+  "entry_url": "https://example.com",
+  "contents": [
+    {
+      "url": "https://example.com",
+      "location": "div.ad",
+      "text": "카지노 첫충 가입머니 지급"
+    },
+    {
+      "url": "https://example.com/board",
+      "location": "comment_1",
+      "text": "당일 대출 가능합니다. 무직자도 즉시 승인!"
+    },
+    {
+      "url": "https://example.com/notice",
+      "location": "div.notice",
+      "text": "안녕하세요. 공공기관 공지사항입니다."
+    }
+  ],
+  "images": []
+}
